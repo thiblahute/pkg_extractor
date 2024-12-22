@@ -1,0 +1,24 @@
+[package]
+name = "pkg-extractor"
+authors = ["Thibault Saunier <tsaunier@igalia.com>"]
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "pkg_extractor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pkg-extractor"
+path = "src/main.rs"
+
+[dependencies]
+apple-flat-package = "0.20"
+structopt = "0.3"
+tempfile = "3.2"
+walkdir = "2.3"
+xz2 = "0.1"
+libflate = "2"
+cpio-archive = "0.10"
+log = "0.4"
+env_logger = "0.11"
