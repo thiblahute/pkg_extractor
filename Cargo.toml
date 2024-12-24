@@ -1,0 +1,29 @@
+[package]
+name = "pkg-extractor"
+authors = ["Thibault Saunier <tsaunier@igalia.com>"]
+version = "0.1.0"
+edition = "2021"
+description = "Extract macOS .pkg files (flat packages) — supports product and component packages, PBZX payloads, and xar fallback"
+license = "MPL-2.0"
+repository = "https://github.com/thiblahute/pkg_extractor"
+readme = "README.md"
+keywords = ["macos", "pkg", "extract", "apple", "installer"]
+categories = ["command-line-utilities", "compression"]
+
+[lib]
+name = "pkg_extractor"
+path = "src/lib.rs"
+
+[dependencies]
+apple-flat-package = "0.20"
+structopt = "0.3"
+tempfile = "3.2"
+xz2 = "0.1"
+libflate = "2"
+cpio-archive = "0.10"
+log = "0.4"
+env_logger = "0.11"
+
+[[bin]]
+name = "pkg-extractor"
+path = "src/main.rs"
