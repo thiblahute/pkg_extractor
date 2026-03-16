@@ -1,6 +1,6 @@
 use apple_flat_package::component_package::ComponentPackageReader;
 use apple_flat_package::reader::{PkgFlavor, PkgReader};
-use cpio_archive::{NewcReader, CpioReader, CpioHeader};
+use cpio_archive::{NewcReader, OdcReader, CpioReader};
 use log::{debug, error, info, warn};
 use std::error::Error;
 use std::fmt::Debug;
@@ -72,20 +72,51 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
         fs::create_dir_all(&self.output_dir)?;
 
         let reader = self.reader.take().unwrap();
-
-        let mut pkg_reader = PkgReader::new(reader)?;
+        
+        // If we don't have a file path, save the reader data to a temp file first
+        // This ensures xar fallback will work if needed
+        if self.pkg_file_path.is_none() {
+            println!("No file path provided - saving in-memory data to temporary file for potential xar fallback...");
+            let temp_file = tempfile::NamedTempFile::new()?;
+            let temp_path = temp_file.path().to_path_buf();
+            
+            // Read all data from reader and write to temp file
+            let mut file = std::fs::File::create(&temp_path)?;
+            let mut buffer = Vec::new();
+            let mut reader_cursor = reader;
+            reader_cursor.read_to_end(&mut buffer)?;
+            file.write_all(&buffer)?;
+            file.sync_all()?;
+            drop(file); // Close the file before using it
+            
+            // Update our pkg_file_path to the temp file
+            self.pkg_file_path = Some(temp_path.clone());
+            
+            // Create a new reader from the temp file
+            let temp_file_reader = std::fs::File::open(&temp_path)?;
+            let mut pkg_reader = PkgReader::new(temp_file_reader)?;
+            
+            // Continue with extraction
+            self.extract_with_pkg_reader(&mut pkg_reader)
+        } else {
+            let mut pkg_reader = PkgReader::new(reader)?;
+            self.extract_with_pkg_reader(&mut pkg_reader)
+        }
+    }
+    
+    fn extract_with_pkg_reader<T: Read + Seek + Sized + Debug>(&self, pkg_reader: &mut PkgReader<T>) -> Result<(), Box<dyn Error>> {
 
         // Handle different package flavors
         match pkg_reader.flavor() {
             PkgFlavor::Component => {
                 println!("Package type: Component");
                 debug!("Package type: Component");
-                self.extract_root_component(&mut pkg_reader)?;
+                self.extract_root_component_generic(pkg_reader)?;
             }
             PkgFlavor::Product => {
                 println!("Package type: Product");
                 debug!("Package type: Product");
-                self.extract_product_package(&mut pkg_reader)?;
+                self.extract_product_package_generic(pkg_reader)?;
             }
         }
 
@@ -98,6 +129,61 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
             self.output_dir.display()
         );
         Ok(())
+    }
+
+    fn extract_root_component_generic<T: Read + Seek + Sized + Debug>(&self, pkg_reader: &mut PkgReader<T>) -> Result<(), Box<dyn Error>> {
+        match pkg_reader.root_component() {
+            Ok(Some(component_pkg_reader)) => {
+                debug!("Extracting Root Component Package");
+                self.extract_component_package(&component_pkg_reader)?;
+                Ok(())
+            }
+            Ok(None) => {
+                println!("No root component found");
+                self.extract_with_xar_fallback()
+            }
+            Err(e) => {
+                println!("Error getting component payload: {}", e);
+                println!("This is likely an XML parsing issue with package metadata.");
+                println!("Attempting to continue with root component extraction...");
+                
+                match self.extract_with_xar_fallback() {
+                    Ok(_) => Ok(()),
+                    Err(root_err) => {
+                        println!("Root component extraction also failed: {}", root_err);
+                        self.extract_with_xar_fallback()
+                    }
+                }
+            }
+        }
+    }
+
+    fn extract_product_package_generic<T: Read + Seek + Sized + Debug>(&self, pkg_reader: &mut PkgReader<T>) -> Result<(), Box<dyn Error>> {
+        println!("Extracting product package...");
+        match pkg_reader.component_packages() {
+            Ok(component_packages) => {
+                println!("Found {} component packages", component_packages.len());
+                info!("Found {} component packages", component_packages.len());
+                for (i, component_pkg_reader) in component_packages.iter().enumerate() {
+                    println!("Extracting component package {} of {}", i + 1, component_packages.len());
+                    self.extract_component_package(&component_pkg_reader)?;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                println!("Error getting component packages: {}", e);
+                println!("This is likely an XML parsing issue with package metadata.");
+                println!("Attempting to continue with root component extraction...");
+                
+                match self.extract_with_xar_fallback() {
+                    Ok(_) => Ok(()),
+                    Err(root_err) => {
+                        println!("Root component extraction also failed: {}", root_err);
+                        self.extract_with_xar_fallback()
+                    }
+                }
+            }
+        }
     }
 
     fn extract_root_component(&self, pkg_reader: &mut PkgReader<R>) -> Result<(), Box<dyn Error>> {
@@ -139,13 +225,24 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
                         self.extract_component_package(&component_pkg_reader)?;
                     }
                     Ok(None) => {
-                        println!("No root component found either, trying xar fallback...");
-                        self.extract_with_xar_fallback()?;
+                        println!("No root component found either");
+                        if self.pkg_file_path.is_some() {
+                            println!("Trying xar fallback...");
+                            self.extract_with_xar_fallback()?;
+                        } else {
+                            println!("No file path available for xar fallback, extraction failed");
+                            return Err("Cannot extract package: no root component found and no file path for xar fallback".into());
+                        }
                     }
                     Err(e2) => {
                         println!("Root component extraction also failed: {}", e2);
-                        println!("Trying xar fallback extraction...");
-                        self.extract_with_xar_fallback()?;
+                        if self.pkg_file_path.is_some() {
+                            println!("Trying xar fallback extraction...");
+                            self.extract_with_xar_fallback()?;
+                        } else {
+                            println!("No file path available for xar fallback, extraction failed");
+                            return Err("Cannot extract package: both apple-flat-package and root component extraction failed, and no file path for xar fallback".into());
+                        }
                     }
                 }
             }
@@ -265,8 +362,19 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
 
     /// Fallback extraction method using system xar command
     fn extract_with_xar_fallback(&self) -> Result<(), Box<dyn Error>> {
-        let pkg_path = self.pkg_file_path.as_ref()
-            .ok_or("No pkg file path available for xar fallback")?;
+        // If we don't have a file path, we need to create a temporary file
+        let pkg_path = if let Some(path) = &self.pkg_file_path {
+            path.clone()
+        } else {
+            // Read data from reader and write to temp file
+            println!("No file path available, creating temporary file for xar extraction...");
+            let temp_file = tempfile::NamedTempFile::new()?;
+            let temp_path = temp_file.path().to_path_buf();
+            
+            // We now save the data to a temp file before starting extraction,
+            // so this should not happen anymore
+            return Err("No file path available for xar fallback".into());
+        };
 
         println!("Attempting xar fallback extraction...");
         
@@ -274,15 +382,41 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
         let temp_dir = tempfile::tempdir()?;
         let temp_path = temp_dir.path();
 
-        // Extract the .pkg file using xar
-        let output = Command::new("xar")
-            .args(&["-xf", &pkg_path.to_string_lossy()])
-            .current_dir(temp_path)
+        // First, list all components in the package
+        let list_output = Command::new("xar")
+            .args(&["-tf", &pkg_path.to_string_lossy()])
             .output()?;
-
-        if !output.status.success() {
-            return Err(format!("xar extraction failed: {}", 
-                String::from_utf8_lossy(&output.stderr)).into());
+            
+        if !list_output.status.success() {
+            return Err(format!("Failed to list package contents: {}", 
+                String::from_utf8_lossy(&list_output.stderr)).into());
+        }
+        
+        let contents = String::from_utf8_lossy(&list_output.stdout);
+        let component_names: Vec<&str> = contents.lines()
+            .filter(|line| line.ends_with(".pkg") && !line.contains("/"))
+            .collect();
+            
+        println!("Found {} components in package", component_names.len());
+        for name in &component_names {
+            println!("  - {}", name);
+        }
+        
+        // Extract each component individually to handle partial failures
+        for component_name in &component_names {
+            println!("Extracting component: {}", component_name);
+            let output = Command::new("xar")
+                .args(&["-xf", &pkg_path.to_string_lossy(), component_name])
+                .current_dir(temp_path)
+                .output()?;
+                
+            if !output.status.success() {
+                println!("Failed to extract {}: {}", component_name, 
+                        String::from_utf8_lossy(&output.stderr));
+                println!("Continuing with next component...");
+            } else {
+                println!("Successfully extracted {}", component_name);
+            }
         }
 
         println!("xar extraction completed, processing component packages...");
@@ -301,10 +435,18 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
                 // Extract payload from this component
                 let payload_path = path.join("Payload");
                 if payload_path.exists() {
-                    let files_extracted = self.extract_payload_file(&payload_path)?;
-                    extracted_files += files_extracted;
-                    println!("Extracted {} files from {}", files_extracted, 
-                            path.file_name().unwrap().to_string_lossy());
+                    match self.extract_payload_file(&payload_path) {
+                        Ok(files_extracted) => {
+                            extracted_files += files_extracted;
+                            println!("Extracted {} files from {}", files_extracted, 
+                                    path.file_name().unwrap().to_string_lossy());
+                        }
+                        Err(e) => {
+                            println!("Failed to extract payload from {}: {}", 
+                                    path.file_name().unwrap().to_string_lossy(), e);
+                            println!("Continuing with other components...");
+                        }
+                    }
                 }
             }
         }
@@ -325,67 +467,95 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
         drop(file); // Close the file before reopening
         
         if &header == b"pbzx" {
-            println!("Detected pbzx format, using pure Rust extraction");
+            println!("Detected pbzx format, trying pure Rust extraction first");
             
-            // Open the file again for pbzx processing
+            // Try pure Rust implementation first
             let file = File::open(payload_path)?;
-            let mut pbzx_reader = pbzx::PbzxReader::new(file)?;
-            
-            // Decompress pbzx to memory first
-            let mut decompressed_cpio = Vec::new();
-            pbzx_reader.decompress_to(&mut decompressed_cpio)?;
-            
-            println!("Decompressed {} bytes of cpio data", decompressed_cpio.len());
-            
-            // Now extract the cpio archive
-            let cursor = Cursor::new(decompressed_cpio);
-            let mut cpio_reader = NewcReader::new(cursor);
-            
-            let mut file_count = 0;
-            while let Some(entry) = cpio_reader.read_next()? {
-                let path = entry.name();
-                
-                // Skip special entries
-                if path == "." || path == "TRAILER!!!" || path.is_empty() {
-                    continue;
-                }
-                
-                let target_path = self.output_dir.join(path);
-                
-                // Create parent directories
-                if let Some(parent) = target_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                
-                // Check file type
-                let mode = entry.mode();
-                if mode & 0o170000 == 0o040000 {
-                    // Directory
-                    fs::create_dir_all(&target_path)?;
-                } else if mode & 0o170000 == 0o100000 {
-                    // Regular file
-                    let mut file = File::create(&target_path)?;
-                    let mut content = Vec::new();
-                    cpio_reader.read_to_end(&mut content)?;
-                    file.write_all(&content)?;
-                    file_count += 1;
-                    
-                    if file_count <= 10 || file_count % 1000 == 0 {
-                        println!("Extracted file {}: {}", file_count, path);
+            match pbzx::PbzxReader::new(file) {
+                Ok(mut pbzx_reader) => {
+                    let mut decompressed_cpio = Vec::new();
+                    match pbzx_reader.decompress_to(&mut decompressed_cpio) {
+                        Ok(_) => {
+                            println!("Pure Rust pbzx extraction succeeded, {} bytes", decompressed_cpio.len());
+                            
+                            // Extract the cpio archive
+                            let cursor = Cursor::new(decompressed_cpio);
+                            let mut cpio_reader = OdcReader::new(cursor);
+                            
+                            let mut file_count = 0;
+                            while let Some(entry) = cpio_reader.read_next()? {
+                                let path = entry.name();
+                                
+                                // Skip special entries
+                                if path == "." || path == "TRAILER!!!" || path.is_empty() {
+                                    continue;
+                                }
+                                
+                                let target_path = self.output_dir.join(path);
+                                
+                                // Create parent directories
+                                if let Some(parent) = target_path.parent() {
+                                    fs::create_dir_all(parent)?;
+                                }
+                                
+                                // Check file type
+                                let mode = entry.mode();
+                                if mode & 0o170000 == 0o040000 {
+                                    // Directory
+                                    fs::create_dir_all(&target_path)?;
+                                } else if mode & 0o170000 == 0o100000 {
+                                    // Regular file
+                                    let mut file = File::create(&target_path)?;
+                                    let mut content = Vec::new();
+                                    cpio_reader.read_to_end(&mut content)?;
+                                    file.write_all(&content)?;
+                                    file_count += 1;
+                                    
+                                    if file_count <= 10 || file_count % 1000 == 0 {
+                                        println!("Extracted file {}: {}", file_count, path);
+                                    }
+                                }
+                            }
+                            
+                            println!("Extracted {} files from cpio archive", file_count);
+                            return Ok(file_count);
+                        }
+                        Err(e) => {
+                            println!("Pure Rust pbzx extraction failed: {}", e);
+                            println!("Falling back to pbzx command-line tool...");
+                        }
                     }
                 }
-                // Skip other file types for now
+                Err(e) => {
+                    println!("Failed to create pbzx reader: {}", e);
+                    println!("Falling back to pbzx command-line tool...");
+                }
             }
             
-            println!("Extracted {} files from cpio archive", file_count);
-            Ok(file_count)
+            // Fallback to shell command
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("cd '{}' && pbzx -n '{}' | cpio -idm", 
+                            self.output_dir.display(), 
+                            payload_path.display()))
+                .output()?;
+
+            if output.status.success() {
+                // Count extracted files
+                let file_count = self.count_files_recursive(&self.output_dir)?;
+                println!("Shell pbzx extraction succeeded, {} files", file_count);
+                Ok(file_count)
+            } else {
+                println!("Shell pbzx extraction failed: {}", String::from_utf8_lossy(&output.stderr));
+                Ok(0)
+            }
         } else {
             println!("Detected legacy format, using gzip + cpio extraction");
             
             // Try legacy gzipped cpio format using pure Rust
             let file = File::open(payload_path)?;
             let gz_decoder = libflate::gzip::Decoder::new(file)?;
-            let mut cpio_reader = NewcReader::new(gz_decoder);
+            let mut cpio_reader = OdcReader::new(gz_decoder);
             
             let mut file_count = 0;
             while let Some(entry) = cpio_reader.read_next()? {

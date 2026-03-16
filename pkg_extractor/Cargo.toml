@@ -12,6 +12,14 @@ path = "src/lib.rs"
 name = "pkg-extractor"
 path = "src/main.rs"
 
+[[bin]]
+name = "test-pbzx"
+path = "src/test_pbzx.rs"
+
+[[bin]]
+name = "test-full"
+path = "src/test_full_extraction.rs"
+
 [dependencies]
 apple-flat-package = "0.20"
 structopt = "0.3"
