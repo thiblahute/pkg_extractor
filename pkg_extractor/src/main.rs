@@ -35,5 +35,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = File::open(&opt.pkg_path)?;
     let reader = BufReader::new(file);
 
-    pkg_extractor::PkgExtractor::new(reader, opt.output_dir).extract()
+    pkg_extractor::PkgExtractor::new_with_file_path(reader, opt.output_dir, opt.pkg_path).extract()
 }
