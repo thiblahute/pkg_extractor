@@ -6,7 +6,7 @@
 
 use log::{debug, info};
 use std::io::{Cursor, Read, Write};
-use xz2::read::XzDecoder;
+use liblzma::read::XzDecoder;
 
 #[derive(Debug, Clone, Copy)]
 enum CompressionAlgo {
