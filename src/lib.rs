@@ -217,7 +217,7 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
                 FileType::Directory => {
                     fs::create_dir_all(&target_path)?;
                 }
-                FileType::Regular if file_size > 0 => {
+                FileType::Regular => {
                     drop(header);
                     let mut outfile = create_file_with_mode(&target_path, mode)?;
                     let mut buf = vec![0u8; 8192];
