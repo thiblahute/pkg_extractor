@@ -166,7 +166,10 @@ mod tests {
         // triggers the xz-decode branch.
         let payload = vec![b'a'; 4096];
         let compressed = xz_encode(&payload);
-        assert!(compressed.len() < payload.len(), "expected xz to shrink input");
+        assert!(
+            compressed.len() < payload.len(),
+            "expected xz to shrink input"
+        );
         let stream = build(&[(payload.as_slice(), compressed.as_slice())]);
         assert_eq!(decode(&stream), payload);
     }

@@ -40,9 +40,7 @@ use rstest::rstest;
 const GSTREAMER_MIRROR: &str = "https://gstreamer.freedesktop.org/data/pkg/osx";
 
 fn download_gstreamer_devel(version: &str) -> reqwest::Result<Bytes> {
-    let url = format!(
-        "{GSTREAMER_MIRROR}/{version}/gstreamer-1.0-devel-{version}-universal.pkg"
-    );
+    let url = format!("{GSTREAMER_MIRROR}/{version}/gstreamer-1.0-devel-{version}-universal.pkg");
     blocking::Client::builder()
         // The freedesktop mirror's CDN 403s the default `reqwest/…` UA.
         .user_agent(concat!("pkg-extractor/", env!("CARGO_PKG_VERSION")))
@@ -57,27 +55,17 @@ fn download_gstreamer_devel(version: &str) -> reqwest::Result<Bytes> {
 /// Walk `root` and produce a sorted, one-line-per-entry textual summary of
 /// every file and symlink under it. Directories are implicit.
 fn tree_summary(root: &Path) -> Result<String, Box<dyn Error>> {
-    fn walk(
-        root: &Path,
-        dir: &Path,
-        out: &mut Vec<String>,
-    ) -> Result<(), Box<dyn Error>> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), Box<dyn Error>> {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            let rel = path
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .into_owned();
+            let rel = path.strip_prefix(root)?.to_string_lossy().into_owned();
             let ft = entry.file_type()?;
             let meta = fs::symlink_metadata(&path)?;
             let perm = meta.permissions().mode() & 0o7777;
             if ft.is_symlink() {
                 let target = fs::read_link(&path)?;
-                out.push(format!(
-                    "{perm:04o}\tsymlink\t{}\t{rel}",
-                    target.display()
-                ));
+                out.push(format!("{perm:04o}\tsymlink\t{}\t{rel}", target.display()));
             } else if ft.is_dir() {
                 walk(root, &path, out)?;
             } else if ft.is_file() {
@@ -114,16 +102,10 @@ fn fixture_path(version: &str) -> PathBuf {
 /// Download `version`, extract it with `PkgExtractor`, and hand back the
 /// tree summary alongside the tempdir guard (so callers can still inspect
 /// the extraction on failure).
-fn extract_and_summarise(
-    version: &str,
-) -> Result<(String, tempfile::TempDir), Box<dyn Error>> {
+fn extract_and_summarise(version: &str) -> Result<(String, tempfile::TempDir), Box<dyn Error>> {
     let bytes = download_gstreamer_devel(version)?;
     let tmp = tempfile::tempdir()?;
-    PkgExtractor::new(
-        Cursor::new(bytes.to_vec()),
-        Some(tmp.path().to_path_buf()),
-    )
-    .extract()?;
+    PkgExtractor::new(Cursor::new(bytes.to_vec()), Some(tmp.path().to_path_buf())).extract()?;
     let summary = tree_summary(tmp.path())?;
     Ok((summary, tmp))
 }
@@ -174,9 +156,7 @@ fn short_diff(expected: &str, actual: &str) -> String {
 /// mismatch and points at the regeneration command.
 #[rstest]
 #[ignore = "downloads a ~700 MiB installer"]
-fn extraction_matches_fixture(
-    #[values("1.28.2")] version: &str,
-) -> Result<(), Box<dyn Error>> {
+fn extraction_matches_fixture(#[values("1.28.2")] version: &str) -> Result<(), Box<dyn Error>> {
     let (summary, _tmp) = extract_and_summarise(version)?;
     let fixture = fixture_path(version);
     let expected = fs::read_to_string(&fixture).map_err(|e| {
@@ -206,9 +186,7 @@ fn extraction_matches_fixture(
 /// does not compare against the old fixture.
 #[rstest]
 #[ignore = "downloads installers and overwrites committed fixtures"]
-fn regenerate_fixture(
-    #[values("1.28.2")] version: &str,
-) -> Result<(), Box<dyn Error>> {
+fn regenerate_fixture(#[values("1.28.2")] version: &str) -> Result<(), Box<dyn Error>> {
     let (summary, _tmp) = extract_and_summarise(version)?;
     let fixture = fixture_path(version);
     fs::create_dir_all(fixture.parent().unwrap())?;

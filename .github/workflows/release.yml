@@ -1,14 +1,38 @@
 name: Publish to crates.io
+
 on:
   push:
     tags: ["v*"] # Triggers when pushing tags starting with 'v'
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  # Re-run every test, including the `#[ignore]`d integration test that
+  # downloads a real `.pkg` and diffs the extraction against the committed
+  # fixture. Publishing only happens if this passes.
+  full_test:
+    name: Full tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run full test suite (including ignored download tests)
+        run: cargo test --all-targets -- --include-ignored
+
   publish:
-    runs-on: ubuntu-latest
+    name: Publish
+    needs: full_test
+    runs-on: macos-latest
     permissions:
       id-token: write # Required for OIDC token exchange
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - run: cargo publish

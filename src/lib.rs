@@ -375,7 +375,10 @@ mod tests {
     #[test]
     fn safe_join_accepts_relative_and_curdir_paths() {
         let root = Path::new("/out");
-        assert_eq!(safe_join(root, "foo").as_deref(), Some(Path::new("/out/foo")));
+        assert_eq!(
+            safe_join(root, "foo").as_deref(),
+            Some(Path::new("/out/foo"))
+        );
         assert_eq!(
             safe_join(root, "a/b/c").as_deref(),
             Some(Path::new("/out/a/b/c"))
@@ -437,10 +440,7 @@ mod tests {
     }
 
     fn test_extractor(out_dir: &Path) -> PkgExtractor<Cursor<Vec<u8>>> {
-        PkgExtractor::new(
-            Cursor::new(Vec::<u8>::new()),
-            Some(out_dir.to_path_buf()),
-        )
+        PkgExtractor::new(Cursor::new(Vec::<u8>::new()), Some(out_dir.to_path_buf()))
     }
 
     #[test]
@@ -457,10 +457,7 @@ mod tests {
 
         let root = tmp.path();
         assert!(root.join("dir").is_dir());
-        assert_eq!(
-            fs::read(root.join("dir/hello.txt")).unwrap(),
-            b"hello\n"
-        );
+        assert_eq!(fs::read(root.join("dir/hello.txt")).unwrap(), b"hello\n");
         assert!(root.join("empty").is_file());
         assert_eq!(fs::read(root.join("empty")).unwrap(), Vec::<u8>::new());
     }
