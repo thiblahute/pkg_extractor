@@ -208,7 +208,16 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
                 continue;
             }
 
-            let target_path = self.output_dir.join(&name);
+            let target_path = match safe_join(&self.output_dir, &name) {
+                Some(p) => p,
+                None => {
+                    warn!(
+                        "Refusing to extract entry {name:?}: resolves outside {}",
+                        self.output_dir.display()
+                    );
+                    continue;
+                }
+            };
             if let Some(parent) = target_path.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -277,6 +286,28 @@ fn create_file_with_mode(path: &Path, mode: u32) -> std::io::Result<File> {
         let _ = mode;
     }
     options.open(path)
+}
+
+/// Join a cpio entry name onto the output directory, refusing any path
+/// component that would escape the root (`..`, or an absolute path, or a
+/// Windows drive prefix). Returns `None` when the entry is unsafe. Normal
+/// Apple Payload entries are `./`-rooted and always resolve inside.
+fn safe_join(root: &Path, entry: &str) -> Option<PathBuf> {
+    let candidate = Path::new(entry);
+    if candidate.is_absolute() {
+        return None;
+    }
+
+    let mut out = root.to_path_buf();
+    for component in candidate.components() {
+        use std::path::Component;
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Create `link` as a symlink pointing at `target`. If `link` already exists
