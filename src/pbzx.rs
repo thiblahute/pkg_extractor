@@ -96,3 +96,102 @@ impl<R: Read> PbzxReader<R> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liblzma::write::XzEncoder;
+
+    /// Build a pbzx stream containing one chunk per `(uncompressed, compressed)`
+    /// pair. Pass `compressed == uncompressed` for verbatim chunks, or a
+    /// shorter buffer (e.g. xz-encoded output) for compressed chunks.
+    fn build(chunks: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"pbzx");
+        out.extend_from_slice(&0x0100_0000u64.to_be_bytes());
+        for (uncomp, comp) in chunks {
+            out.extend_from_slice(&(uncomp.len() as u64).to_be_bytes());
+            out.extend_from_slice(&(comp.len() as u64).to_be_bytes());
+            out.extend_from_slice(comp);
+        }
+        out
+    }
+
+    fn decode(stream: &[u8]) -> Vec<u8> {
+        let mut reader = PbzxReader::new(Cursor::new(stream)).expect("valid pbzx header");
+        let mut out = Vec::new();
+        reader.decompress_to(&mut out).expect("decode succeeds");
+        out
+    }
+
+    fn xz_encode(data: &[u8]) -> Vec<u8> {
+        let mut enc = XzEncoder::new(Vec::new(), 6);
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    #[test]
+    fn rejects_non_pbzx_magic() {
+        let mut bytes = b"XXXX".to_vec();
+        bytes.extend_from_slice(&0u64.to_be_bytes());
+        assert!(PbzxReader::new(Cursor::new(bytes)).is_err());
+    }
+
+    #[test]
+    fn decodes_empty_stream() {
+        let stream = build(&[]);
+        assert_eq!(decode(&stream), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn decodes_single_verbatim_chunk() {
+        let payload = b"hello world".as_slice();
+        let stream = build(&[(payload, payload)]);
+        assert_eq!(decode(&stream), payload);
+    }
+
+    #[test]
+    fn decodes_multiple_verbatim_chunks() {
+        let stream = build(&[
+            (b"first ".as_slice(), b"first ".as_slice()),
+            (b"second ".as_slice(), b"second ".as_slice()),
+            (b"third".as_slice(), b"third".as_slice()),
+        ]);
+        assert_eq!(decode(&stream), b"first second third");
+    }
+
+    #[test]
+    fn decodes_xz_compressed_chunk() {
+        // Data compressible enough that `compressed < uncompressed`, which
+        // triggers the xz-decode branch.
+        let payload = vec![b'a'; 4096];
+        let compressed = xz_encode(&payload);
+        assert!(compressed.len() < payload.len(), "expected xz to shrink input");
+        let stream = build(&[(payload.as_slice(), compressed.as_slice())]);
+        assert_eq!(decode(&stream), payload);
+    }
+
+    #[test]
+    fn decodes_tiny_chunk_that_old_bit24_check_would_drop() {
+        // Regression guard for the previous reader: any chunk whose
+        // uncompressed size was under 16 MiB (bit 24 clear) used to be
+        // mistaken for an end-of-stream sentinel and the decoder would
+        // return Ok with zero bytes.
+        let payload = vec![0x42u8; 100];
+        let stream = build(&[(payload.as_slice(), payload.as_slice())]);
+        assert_eq!(decode(&stream), payload);
+    }
+
+    #[test]
+    fn errors_on_truncated_chunk_header() {
+        // Valid header, then an uncompressed-size byte but no compressed-
+        // size or body. Must fail, not silently stop.
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"pbzx");
+        stream.extend_from_slice(&0x0100_0000u64.to_be_bytes());
+        stream.extend_from_slice(&0x10u64.to_be_bytes()); // uncompressed, no compressed/body
+        let mut reader = PbzxReader::new(Cursor::new(stream)).unwrap();
+        let mut out = Vec::new();
+        assert!(reader.decompress_to(&mut out).is_err());
+    }
+}

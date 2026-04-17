@@ -336,3 +336,206 @@ fn create_symlink(target: &str, link: &Path) -> std::io::Result<()> {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    // ---- `FileType::from_mode` ----
+
+    #[test]
+    fn file_type_from_mode_regular() {
+        assert_eq!(FileType::from_mode(0o100644), FileType::Regular);
+        assert_eq!(FileType::from_mode(0o100755), FileType::Regular);
+    }
+
+    #[test]
+    fn file_type_from_mode_directory() {
+        assert_eq!(FileType::from_mode(0o040755), FileType::Directory);
+    }
+
+    #[test]
+    fn file_type_from_mode_symlink() {
+        assert_eq!(FileType::from_mode(0o120777), FileType::Symlink);
+    }
+
+    #[test]
+    fn file_type_from_mode_other() {
+        // Char device, block device, FIFO, socket -- none of these four
+        // should be mistaken for a regular or symlink.
+        assert_eq!(FileType::from_mode(0o020644), FileType::Other);
+        assert_eq!(FileType::from_mode(0o060644), FileType::Other);
+        assert_eq!(FileType::from_mode(0o010644), FileType::Other);
+        assert_eq!(FileType::from_mode(0o140644), FileType::Other);
+    }
+
+    // ---- `safe_join` ----
+
+    #[test]
+    fn safe_join_accepts_relative_and_curdir_paths() {
+        let root = Path::new("/out");
+        assert_eq!(safe_join(root, "foo").as_deref(), Some(Path::new("/out/foo")));
+        assert_eq!(
+            safe_join(root, "a/b/c").as_deref(),
+            Some(Path::new("/out/a/b/c"))
+        );
+        assert_eq!(
+            safe_join(root, "./foo").as_deref(),
+            Some(Path::new("/out/foo"))
+        );
+        assert_eq!(
+            safe_join(root, "./a/./b").as_deref(),
+            Some(Path::new("/out/a/b"))
+        );
+    }
+
+    #[test]
+    fn safe_join_rejects_parent_dir_anywhere() {
+        let root = Path::new("/out");
+        assert_eq!(safe_join(root, ".."), None);
+        assert_eq!(safe_join(root, "../etc/passwd"), None);
+        assert_eq!(safe_join(root, "a/../../b"), None);
+        assert_eq!(safe_join(root, "a/b/.."), None);
+    }
+
+    #[test]
+    fn safe_join_rejects_absolute_paths() {
+        let root = Path::new("/out");
+        assert_eq!(safe_join(root, "/etc/passwd"), None);
+    }
+
+    // ---- End-to-end `extract_cpio` round-trip ----
+
+    /// Build one ODC ("070707") cpio header-plus-body for the given entry.
+    /// `name` must be valid UTF-8; the NUL terminator is added here. For
+    /// symlinks, pass the link target in `body`.
+    fn odc_entry(name: &str, mode: u32, body: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"070707");
+        for _ in 0..2 {
+            buf.extend_from_slice(b"000000"); // dev, ino
+        }
+        buf.extend_from_slice(format!("{mode:06o}").as_bytes());
+        buf.extend_from_slice(b"000000"); // uid
+        buf.extend_from_slice(b"000000"); // gid
+        buf.extend_from_slice(b"000001"); // nlink
+        buf.extend_from_slice(b"000000"); // rdev
+        buf.extend_from_slice(b"00000000000"); // mtime
+        let name_bytes = name.as_bytes();
+        let namesize = name_bytes.len() + 1; // includes trailing NUL
+        buf.extend_from_slice(format!("{namesize:06o}").as_bytes());
+        buf.extend_from_slice(format!("{:011o}", body.len()).as_bytes());
+        buf.extend_from_slice(name_bytes);
+        buf.push(0);
+        buf.extend_from_slice(body);
+        buf
+    }
+
+    fn trailer() -> Vec<u8> {
+        odc_entry("TRAILER!!!", 0, b"")
+    }
+
+    fn test_extractor(out_dir: &Path) -> PkgExtractor<Cursor<Vec<u8>>> {
+        PkgExtractor::new(
+            Cursor::new(Vec::<u8>::new()),
+            Some(out_dir.to_path_buf()),
+        )
+    }
+
+    #[test]
+    fn extract_cpio_materialises_files_dirs_and_empties() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut cpio = Vec::new();
+        cpio.extend(odc_entry("./dir", 0o040755, b""));
+        cpio.extend(odc_entry("./dir/hello.txt", 0o100644, b"hello\n"));
+        cpio.extend(odc_entry("./empty", 0o100644, b""));
+        cpio.extend(trailer());
+
+        test_extractor(tmp.path()).extract_cpio(&cpio).unwrap();
+
+        let root = tmp.path();
+        assert!(root.join("dir").is_dir());
+        assert_eq!(
+            fs::read(root.join("dir/hello.txt")).unwrap(),
+            b"hello\n"
+        );
+        assert!(root.join("empty").is_file());
+        assert_eq!(fs::read(root.join("empty")).unwrap(), Vec::<u8>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_cpio_preserves_unix_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut cpio = Vec::new();
+        cpio.extend(odc_entry("./script", 0o100755, b"#!/bin/sh\nexit 0\n"));
+        cpio.extend(odc_entry("./readonly", 0o100444, b"data"));
+        cpio.extend(trailer());
+
+        test_extractor(tmp.path()).extract_cpio(&cpio).unwrap();
+
+        let script_mode = fs::metadata(tmp.path().join("script"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(script_mode, 0o755);
+
+        let ro_mode = fs::metadata(tmp.path().join("readonly"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(ro_mode, 0o444);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_cpio_materialises_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut cpio = Vec::new();
+        cpio.extend(odc_entry("./real.txt", 0o100644, b"target\n"));
+        cpio.extend(odc_entry("./link", 0o120777, b"real.txt"));
+        cpio.extend(trailer());
+
+        test_extractor(tmp.path()).extract_cpio(&cpio).unwrap();
+
+        let meta = fs::symlink_metadata(tmp.path().join("link")).unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert_eq!(
+            fs::read_link(tmp.path().join("link")).unwrap(),
+            Path::new("real.txt")
+        );
+        // Reading through the symlink yields the target's bytes.
+        assert_eq!(fs::read(tmp.path().join("link")).unwrap(), b"target\n");
+    }
+
+    #[test]
+    fn extract_cpio_refuses_path_traversal_but_keeps_safe_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut cpio = Vec::new();
+        cpio.extend(odc_entry("./../../evil.txt", 0o100644, b"pwned"));
+        cpio.extend(odc_entry("./safe.txt", 0o100644, b"ok"));
+        cpio.extend(trailer());
+
+        test_extractor(tmp.path()).extract_cpio(&cpio).unwrap();
+
+        // Nothing was written above the output root.
+        let parent_evil = tmp
+            .path()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("evil.txt");
+        assert!(!parent_evil.exists());
+        // The legitimate entry beside it still landed.
+        assert_eq!(fs::read(tmp.path().join("safe.txt")).unwrap(), b"ok");
+    }
+}

@@ -17,15 +17,21 @@ path = "src/lib.rs"
 [dependencies]
 # Git version needed: the published 0.20 depends on xz2/lzma-sys which conflicts
 # with liblzma-sys (links = "lzma"). Upstream switched to liblzma in d66848d1.
-apple-flat-package = { git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
-apple-xar = { git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
+# `version` is required for `cargo publish`; the git source is used locally.
+apple-flat-package = { version = "0.20", git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
+apple-xar = { version = "0.20", git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
 structopt = "0.3"
-tempfile = "3.2"
 liblzma = { version = "0.4", default-features = false }
 libflate = "2"
 cpio-archive = "0.10"
 log = "0.4"
 env_logger = "0.11"
+
+[dev-dependencies]
+bytes = "1"
+reqwest = { version = "0.13", features = ["blocking"] }
+rstest = "0.26"
+tempfile = "3.2"
 
 [[bin]]
 name = "pkg-extractor"
