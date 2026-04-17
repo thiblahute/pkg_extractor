@@ -239,6 +239,16 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
                     }
                     file_count += 1;
                 }
+                FileType::Symlink => {
+                    // The link target is stored as the entry body.
+                    drop(header);
+                    let mut target = vec![0u8; file_size as usize];
+                    cpio_reader.read_exact(&mut target)?;
+                    let target_str = String::from_utf8(target)
+                        .map_err(|e| format!("invalid utf-8 symlink target for {name}: {e}"))?;
+                    create_symlink(&target_str, &target_path)?;
+                    file_count += 1;
+                }
                 _ => {
                     debug!("Skipping {:?} entry: {}", FileType::from_mode(mode), name);
                 }
@@ -267,4 +277,31 @@ fn create_file_with_mode(path: &Path, mode: u32) -> std::io::Result<File> {
         let _ = mode;
     }
     options.open(path)
+}
+
+/// Create `link` as a symlink pointing at `target`. If `link` already exists
+/// (e.g. a pre-existing regular file in the destination), it is removed first
+/// so the symlink creation succeeds.
+fn create_symlink(target: &str, link: &Path) -> std::io::Result<()> {
+    if link.symlink_metadata().is_ok() {
+        fs::remove_file(link)?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        // cpio doesn't tell us whether the target is a file or a directory.
+        // Default to file-symlink, which is what Apple payloads ship.
+        std::os::windows::fs::symlink_file(target, link)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "symlinks not supported on this platform",
+        ))
+    }
 }
