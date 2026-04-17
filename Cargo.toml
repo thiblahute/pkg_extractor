@@ -18,6 +18,7 @@ path = "src/lib.rs"
 # Git version needed: the published 0.20 depends on xz2/lzma-sys which conflicts
 # with liblzma-sys (links = "lzma"). Upstream switched to liblzma in d66848d1.
 apple-flat-package = { git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
+apple-xar = { git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
 structopt = "0.3"
 tempfile = "3.2"
 liblzma = { version = "0.4", default-features = false }
