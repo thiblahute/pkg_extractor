@@ -10,9 +10,12 @@ use cpio_archive::{CpioReader as _, OdcReader};
 use log::{debug, error, info, warn};
 use std::error::Error;
 use std::fmt::Debug;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 mod pbzx;
 
@@ -216,7 +219,7 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
                 }
                 FileType::Regular if file_size > 0 => {
                     drop(header);
-                    let mut outfile = File::create(&target_path)?;
+                    let mut outfile = create_file_with_mode(&target_path, mode)?;
                     let mut buf = vec![0u8; 8192];
                     let mut remaining = file_size;
                     while remaining > 0 {
@@ -245,4 +248,23 @@ impl<R: Read + Seek + Sized + Debug> PkgExtractor<R> {
         debug!("Extracted {file_count} files, {total_bytes} bytes from cpio");
         Ok(())
     }
+}
+
+/// Create (or truncate) a regular file carrying the permission bits from a
+/// cpio header. On Unix, only the low 12 bits (`& 0o7777`) are used; the
+/// type-of-file nibble is applied via the create call itself. On non-Unix
+/// hosts we fall back to the default create mode and drop the permission
+/// bits on the floor -- there is no meaningful cross-platform mapping.
+fn create_file_with_mode(path: &Path, mode: u32) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        options.mode(mode & 0o7777);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+    }
+    options.open(path)
 }
