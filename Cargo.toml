@@ -3,7 +3,7 @@ name = "pkg-extractor"
 authors = ["Thibault Saunier <tsaunier@igalia.com>"]
 version = "0.1.1"
 edition = "2021"
-description = "Extract macOS .pkg files (flat packages) — supports product and component packages, PBZX payloads, and xar fallback"
+description = "Extract macOS .pkg files (flat packages): product and component packages with PBZX, gzip, or raw cpio payloads"
 license = "MPL-2.0"
 repository = "https://github.com/thiblahute/pkg_extractor"
 readme = "README.md"
@@ -15,13 +15,15 @@ name = "pkg_extractor"
 path = "src/lib.rs"
 
 [dependencies]
-# Git version needed: the published 0.20 depends on xz2/lzma-sys which conflicts
-# with liblzma-sys (links = "lzma"). Upstream switched to liblzma in d66848d1.
-# `version` is required for `cargo publish`; the git source is used locally.
-apple-flat-package = { version = "0.20", git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
-apple-xar = { version = "0.20", git = "https://github.com/indygreg/apple-platform-rs", rev = "0445322b" }
+# apple-flat-package/apple-xar (crates.io 0.20) pull in xz2 -> lzma-sys, which
+# declares `links = "lzma"`. We decode pbzx payloads ourselves with the pure-Rust
+# lzma-rust2: it has no `links` key, so it adds no second `links = "lzma"` crate.
+# (Depending on liblzma-sys here did exactly that and broke the build and
+# `cargo publish`, which resolves these deps from crates.io, not from git.)
+apple-flat-package = "0.20"
+apple-xar = "0.20"
 structopt = "0.3"
-liblzma = { version = "0.4", default-features = false }
+lzma-rust2 = "0.16"
 libflate = "2"
 cpio-archive = "0.10"
 log = "0.4"

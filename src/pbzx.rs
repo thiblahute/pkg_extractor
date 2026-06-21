@@ -20,8 +20,8 @@
 //! they are equal the chunk is stored verbatim. There is no in-band end-of-
 //! stream marker — the last chunk is simply the one whose read hits EOF.
 
-use liblzma::read::XzDecoder;
 use log::{debug, info};
+use lzma_rust2::XzReader;
 use std::io::{Cursor, Read, Write};
 
 pub struct PbzxReader<R: Read> {
@@ -79,7 +79,8 @@ impl<R: Read> PbzxReader<R> {
             );
 
             if compressed_size < uncompressed_size {
-                let mut decoder = XzDecoder::new(Cursor::new(chunk_data));
+                // Each pbzx chunk is exactly one xz stream; no multi-stream.
+                let mut decoder = XzReader::new(Cursor::new(chunk_data), false);
                 let mut decompressed = Vec::with_capacity(uncompressed_size as usize);
                 decoder.read_to_end(&mut decompressed)?;
                 output.write_all(&decompressed)?;
@@ -100,7 +101,7 @@ impl<R: Read> PbzxReader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liblzma::write::XzEncoder;
+    use lzma_rust2::{XzOptions, XzWriter};
 
     /// Build a pbzx stream containing one chunk per `(uncompressed, compressed)`
     /// pair. Pass `compressed == uncompressed` for verbatim chunks, or a
@@ -125,7 +126,7 @@ mod tests {
     }
 
     fn xz_encode(data: &[u8]) -> Vec<u8> {
-        let mut enc = XzEncoder::new(Vec::new(), 6);
+        let mut enc = XzWriter::new(Vec::new(), XzOptions::with_preset(6)).unwrap();
         enc.write_all(data).unwrap();
         enc.finish().unwrap()
     }
