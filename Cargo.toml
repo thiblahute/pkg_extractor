@@ -1,7 +1,7 @@
 [package]
 name = "pkg-extractor"
 authors = ["Thibault Saunier <tsaunier@igalia.com>"]
-version = "0.1.1"
+version = "0.1.3"
 edition = "2021"
 description = "Extract macOS .pkg files (flat packages): product and component packages with PBZX, gzip, or raw cpio payloads"
 license = "MPL-2.0"
